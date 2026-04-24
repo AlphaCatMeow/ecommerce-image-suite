@@ -119,12 +119,18 @@ python3 scripts/check_providers.py
 >
 > 💡 **小贴士**：多张图必须是**同一商品**，不同颜色/款式请分批处理；平铺图请确保平整无褶皱。
 >
-> 请选择编号（或直接上传图片，我会自动识别类型），然后上传图片即可开始。
+> 📋 **CLI 环境（如 Claude Code）**：无法直接拖拽上传图片，请提供以下任一方式：
+> - 本地文件路径（如 `/Users/me/photos/product.jpg`）
+> - 远程图片 URL（如 `https://example.com/product.jpg`）
+> - Base64 字符串（`data:image/jpeg;base64,/9j/4AAQ...`）
+> - Base64 文件路径（文件内容为 base64 编码的图片数据）
+>
+> 请选择编号（或直接上传图片 / 提供路径或 URL，我会自动识别类型），然后提供图片即可开始。
 
 **2. 等待用户回复：**
 
-- 用户选择编号后，记录 `input_image_type`（见映射表），再提示上传对应数量的图片
-- 用户直接上传图片（未选编号），自动检测 `input_image_type`，进入情况 B
+- 用户选择编号后，记录 `input_image_type`（见映射表），再提示提供对应数量的图片（图形界面：上传图片；CLI：提供本地路径 / URL / base64）
+- 用户直接上传图片或提供路径/URL/base64（未选编号），自动检测 `input_image_type`，进入情况 B
 
 **编号 → `input_image_type` 映射：**
 
@@ -176,6 +182,68 @@ python3 scripts/check_providers.py
 >
 > ⚠️ **严禁行为**：在未尝试上述三级方案的情况下，直接询问用户「请描述一下您的商品」。
 
+### ⚠️ 确定输出目录（output_dir）
+
+> ⚠️ **Agent 必须先检查已有目录，按最大编号 +1 递增，禁止直接使用 001！**
+
+**每个商品任务使用独立子目录**，避免多批次生成图与 `generate_result.json` 互相覆盖。
+
+**自动递增规则**：
+1. 检查 `./output/` 下已有三位数编号子目录（`001/`、`002/`、`003/`、`004/`……）
+2. 取最大编号 +1 作为本次目录（如已有 `004/` 则本次使用 `005/`）
+3. 若 `./output/` 不存在或为空，则从 `001` 开始
+
+**Agent 操作流程**：
+
+1. **先检查已有目录**（必须执行）：
+
+```bash
+# Bash 方式
+if [ -d "./output" ]; then
+  n=$(ls -d ./output/[0-9][0-9][0-9] 2>/dev/null | sort | tail -1 | grep -oE '[0-9]+$')
+  next=$(printf "%03d" $((${n:-0} + 1)))
+  echo "检测到已有目录，将使用: ${next}"
+else
+  next=001
+  echo "output 目录为空，将从 001 开始"
+fi
+```
+
+2. **创建输出目录**：
+
+```bash
+output_dir="$(pwd)/output/${next}"
+mkdir -p "${output_dir}"
+echo "本次套图将保存到: ${output_dir}"
+
+3. **告知用户**：
+
+> 检测到已有商品任务（最高编号：004），本次将使用 **output/005/**。
+> 直接继续，或输入自定义目录名（如 `黑色连衣裙`）。
+
+**同一任务使用多个模型时**：在任务子目录下再创建模型名子目录（如 `output/001/nano-banana/`、`output/001/gpt-image-1.5/`）。
+
+**多模型子目录**（同一任务对比不同模型效果）：
+
+```bash
+# 首个模型
+output_dir="$(pwd)/output/001/nano-banana"
+mkdir -p "${output_dir}"
+# 后续模型
+output_dir_2="$(pwd)/output/001/gpt-image-1.5"
+mkdir -p "${output_dir_2}"
+```
+
+**非 Bash 客户端**：用文件系统工具列出 `./output/` 子目录，找最大数字编号 +1；若无法判断则默认 `./output/001/`。
+
+用户也可**自定义目录名**（如按商品命名）。
+
+记录 `output_dir` 后，后续所有步骤统一使用此路径。
+
+> ⚠️ **常见错误**：直接使用 `output/001/` 会覆盖之前的任务！必须先检查最大编号。
+
+---
+
 ### ⚠️ 图片预处理（最先执行，所有步骤的前提）
 
 > 用户上传的图片保存在 session 临时目录，脚本运行时可能因路径失效或权限问题无法访问。**必须在调用任何脚本前将图片复制到 `{output_dir}/` 下。**
@@ -190,7 +258,7 @@ cp "/absolute/path/to/用户上传图2.jpg" "{output_dir}/back.jpg"   # 若有�
 
 **Agent 操作规则：**
 1. 用 Bash `cp` 命令将每张上传图复制到 `{output_dir}/`
-2. 若 `output_dir` 尚未创建，先 `mkdir -p {output_dir}`
+2. `output_dir` 已在上一步创建，无需重复 `mkdir`
 3. 复制成功后记录工作区路径，后续 `--product-images`、`--model-image`、`analyze.py` 参数全部使用工作区路径
 
 ---
@@ -255,7 +323,7 @@ cp "/absolute/path/to/用户上传图2.jpg" "{output_dir}/back.jpg"   # 若有�
       "type": "design",
       "title": "个性交叉领口",
       "description": "V领结合多重细绑带设计，凸显优雅锁骨曲线",
-      "visual_keywords": ["交叉绑带", "V领", "锁骨", "层次感"],
+      "visual_keywords": ["cross-strap neckline", "V-neck detail", "collarbone"],
       "icon": "design",
       "en": "Cross-strap V-neckline",
       "zh": "个性交叉领口"
@@ -264,7 +332,7 @@ cp "/absolute/path/to/用户上传图2.jpg" "{output_dir}/back.jpg"   # 若有�
       "type": "pattern",
       "title": "唯美碎花印花",
       "description": "黑色底面点缀淡雅樱花图案，营造复古浪漫氛围",
-      "visual_keywords": ["碎花", "樱花", "复古", "浪漫"],
+      "visual_keywords": ["floral print pattern", "cherry blossom motif"],
       "icon": "design",
       "en": "Floral Print",
       "zh": "唯美碎花印花"
@@ -273,7 +341,7 @@ cp "/absolute/path/to/用户上传图2.jpg" "{output_dir}/back.jpg"   # 若有�
       "type": "silhouette",
       "title": "灵动鱼尾设计",
       "description": "下摆采用层次感荷叶边，行走间灵动飘逸",
-      "visual_keywords": ["鱼尾", "荷叶边", "飘逸", "层次"],
+      "visual_keywords": ["ruffle hemline layers", "flowy silhouette"],
       "icon": "fit",
       "en": "Ruffle Hemline",
       "zh": "灵动鱼尾设计"
@@ -281,7 +349,14 @@ cp "/absolute/path/to/用户上传图2.jpg" "{output_dir}/back.jpg"   # 若有�
   ],
 
   "target_audience": "追求个性时尚、喜爱甜美法式风格的年轻女性",
-  "usage_scenes": ["海边度假", "浪漫约会", "周末聚会", "盛夏日常"],
+  "target_scenes": ["海边度假", "浪漫约会", "周末聚会", "盛夏日常"],
+  "target_scene_envs": [
+    "tropical beach with golden sand and turquoise ocean, bright midday sunlight",
+    "romantic outdoor restaurant terrace at dusk, warm candlelight, string lights",
+    "stylish rooftop party, urban skyline backdrop, golden hour glow",
+    "sunny park path, lush green trees, soft natural bokeh"
+  ],
+  "product_style": "甜美法式浪漫",
 
   "input_image_type": "flat_lay",
   "number_of_input_images": 1,
@@ -305,11 +380,31 @@ cp "/absolute/path/to/用户上传图2.jpg" "{output_dir}/back.jpg"   # 若有�
 >
 > 请确认这些卖点是否准确，或补充其他卖点（直接告知即可，我会更新后继续）。
 
-用户确认后继续；若用户有修改，更新 `selling_points` 后继续。
+**用户确认后继续**；若用户说"不对"或表示不准确：
 
-### 兜底方案：调用 analyze.py 脚本
+> ⚠️ **Agent 必须执行以下操作之一**：
+> - **方式A（推荐）**：直接调用项目中内置的专业分析脚本 `analyze.py` 重新分析
+> - **方式B**：询问用户"是否使用项目中更专业的视觉分析脚本重新分析？"
 
-当进入**第③级**时，执行以下脚本，自动按 **Qwen VL → 豆包视觉 → GPT-4o** 顺序降级：
+**调用 analyze.py 的命令**：
+
+```bash
+# 自动选择已配置的视觉供应商（Qwen → 豆包 → OpenAI）
+python3 scripts/analyze.py ./product.jpg --output ./output/product.json
+```
+
+使用 analyze.py 输出的结果继续后续流程。
+
+> ⚠️ **错误处理**：
+> - 若脚本返回 `exit code 2`，表示未配置任何视觉识别 API Key → Agent 必须告知用户配置环境变量（DASHSCOPE_API_KEY / ARK_API_KEY / OPENAI_API_KEY）
+> - 若脚本返回 `exit code 1`，表示 API 调用失败或 JSON 解析失败 → Agent 必须将完整错误信息输出给用户
+> - 若脚本无输出但成功执行（exit code 0），检查是否使用了 `--output` 参数导致结果写入文件而非 stdout
+
+---
+
+### analyze.py 脚本详细用法
+
+**完整用法示例**：
 
 ```bash
 # 自动选择已配置的视觉供应商（Qwen → 豆包 → OpenAI）
@@ -321,6 +416,14 @@ python3 scripts/analyze.py ./product.jpg --provider tongyi
 # 保存到文件供后续步骤使用
 python3 scripts/analyze.py ./product.jpg --output ./output/product.json
 ```
+
+**analyze.py 供应商优先级**（视觉识别，与图像生成供应商独立）：
+
+> ⚠️ **Agent 调试检查清单**（当 analyze.py "没有分析出来"时）：
+> 1. **检查环境变量**：运行 `echo $DASHSCOPE_API_KEY` 或 `python3 scripts/check_providers.py` 确认是否配置
+> 2. **检查图片路径**：确认传入的图片路径存在且可读（`ls -la ./product.jpg`）
+> 3. **检查脚本输出**：分析失败时脚本会将错误输出到 stderr，Agent 必须捕获并显示给用户
+> 4. **尝试手动调用**：让用户手动运行 `python3 scripts/analyze.py ./product.jpg` 查看详细错误
 
 **analyze.py 供应商优先级**（视觉识别，与图像生成供应商独立）：
 
@@ -359,7 +462,7 @@ python3 scripts/analyze.py ./product.jpg --output ./output/product.json
 | 国际 | Amazon | 2000×2000 (1:1) | 英文 |
 | 国际 | 独立站/Shopify | 2000×2000 (1:1) 或 16:9 | 英文 |
 
-### 标准套图（7种）
+### 标准套图（8种+自动补充）
 每种图的详细规格见 `references/image-types.md`
 
 | # | 图片类型 | 核心目标 | 推荐位置 |
@@ -371,6 +474,41 @@ python3 scripts/analyze.py ./product.jpg --output ./output/product.json
 | 5 | **场景展示图** | 生活方式场景，激发代入感 | 第5张 |
 | 6 | **模特展示图** | 真人/AI模特穿搭，直观展示效果 | 第6张 | ⚠️ 仅服装/鞋类 |
 | 7 | **多场景拼图** | 多场景适用性对比，提升决策 | 第7张 |
+| 8 | **电商详情图** | 完整详情页设计（含参数表、多颜色） | 补充图 | 2026.04 新增 |
+
+### 自动补充类型：三角度拼图（正面/侧面/背面）
+
+**触发条件**：当仅提供一张商品图时（`len(product_images) == 1`），脚本**自动生成** `three_angle_view` 类型图片，实现360度展示。
+
+| 图片类型 | 核心目标 | 推荐位置 |
+|---|---------|---------|
+| **三角度拼图** | 同比例展示正面/侧面/背面三个角度，实现完整360度可见性 | 补充图 |
+
+**设计说明**：
+- 采用三栏等宽拼图布局，左中右分别展示：正面、侧面、背面
+- 服装类：使用模特展示（正面/侧面/背面，同一模特）
+- 非服装类：使用商品平铺或挂拍展示
+- 统一背景色（白色/浅灰），保持专业商拍风格
+
+**Agent 操作**：
+- 无需手动添加 `three_angle_view` 到 `--types`
+- 脚本检测到仅一张图时自动插入到 `multi_scene` 之前
+- 若用户已提供多角度图片，则不自动生成此类型
+
+### 电商详情图（ecommerce_detail）
+
+**2026.04 新增**：完整的电商详情页设计，包含产品主图、参数表、卖点卡片、多颜色版本展示。
+
+**生成内容**：
+- 产品英雄图（80% 占比，右侧 45° 角）
+- 功能卖点图标列表（4个图标）
+- 三角度技术图（正面/侧面/背面）
+- 产品参数表（规格、电源、电池、尺寸等）
+- 6 格卖点卡片（2×3 网格）
+- 使用场景图（多场景呈现）
+- 多颜色版本展示（相同结构不同颜色）
+
+**用途**：适合需要详细产品信息的电商详情页面
 
 ---
 
@@ -387,10 +525,15 @@ python3 scripts/analyze.py ./product.jpg --output ./output/product.json
 | 字段 | 来源 | 说明 |
 |------|------|------|
 | `product_description_for_prompt` | **Agent 必须生成** | 精炼的英文/中文商品描述，供 generate.py 拼接所有 Prompt 使用（见格式要求） |
-| `selling_points` | 第二步 JSON | 确保每项含 `zh`/`en` 字段，新格式额外含 `title`/`description`/`visual_keywords` |
+| `selling_points` | 第二步 JSON | 确保每项含 `zh`/`en` 字段，新格式额外含 `title`/`description`/`visual_keywords`（英文关键词） |
 | `garment_position` | Agent 判断 | 服装上衣 → `top`；下装 → `bottom`；连体/全身 → `full-body`；非服装 → `non-apparel` |
 | `product_name` | 第二步 JSON | 完整商品名 |
 | `visual_features` | 第二步 JSON | 结构化视觉特征对象 |
+| `target_scenes` | 第二步 JSON | 中文目标使用场景列表，如 `["海边度假", "约会晚宴"]` |
+| `target_scene_envs` | **Agent 智能生成（优先）** | 与 `target_scenes` 一一对应的英文场景环境描述。**Agent 根据商品信息分析后生成**，包含具体的视觉元素（光线、环境、氛围）。示例：`"tropical beach, golden sand, turquoise ocean, bright midday sunlight, coastal vibe"`。<br><br>⚠️ **禁止依赖硬编码映射**：generate.py 虽有 `_scene_to_env()` 兜底函数（中文场景名→英文环境），但 Agent **必须优先生成 `target_scene_envs`**。兜底函数仅作为最后手段，且效果远不如 Agent 智能生成。 |
+| `product_style` | 第二步 JSON / Agent 补充 | 商品风格标签，如 `"法式浪漫"` / `"运动休闲"`，用于 lifestyle 图标题 |
+| `target_audience` | 第二步 JSON | 目标用户描述，用于推断模特性别/年龄 |
+| `print_design_lock` | 第二步 JSON | 精确锁定商品设计细节的英文约束短语，防止生成时设计被修改 |
 
 ### `product_description_for_prompt` 格式要求
 
@@ -426,36 +569,74 @@ python3 scripts/analyze.py ./product.jpg --output ./output/product.json
     {
       "type": "design", "title": "个性交叉领口",
       "description": "V领结合多重细绑带设计，凸显优雅锁骨曲线",
-      "visual_keywords": ["交叉绑带", "V领", "锁骨", "层次感"],
-      "zh": "个性交叉领口", "en": "Cross-strap V-neckline"
+      "visual_keywords": ["cross-strap neckline", "V-neck detail"],
+      "zh": "个性交叉领口", "en": "Cross-strap V-neckline",
+      "zh_desc": "V领交叉绑带，凸显锁骨曲线", "en_desc": "Delicate cross straps frame the neckline elegantly"
     },
     {
       "type": "pattern", "title": "唯美碎花印花",
       "description": "黑色底面点缀淡雅樱花图案，营造复古浪漫氛围",
-      "visual_keywords": ["碎花", "樱花", "复古", "浪漫"],
-      "zh": "唯美碎花印花", "en": "Floral Print"
+      "visual_keywords": ["floral print pattern", "cherry blossom motif"],
+      "zh": "唯美碎花印花", "en": "Floral Print",
+      "zh_desc": "黑底樱花印花，浪漫复古韵味", "en_desc": "Romantic floral print adds vintage charm"
     },
     {
       "type": "silhouette", "title": "灵动鱼尾设计",
       "description": "下摆采用层次感荷叶边，行走间灵动飘逸",
-      "visual_keywords": ["鱼尾", "荷叶边", "飘逸", "层次"],
-      "zh": "灵动鱼尾设计", "en": "Ruffle Hemline"
+      "visual_keywords": ["ruffle hemline layers", "flowy silhouette"],
+      "zh": "灵动鱼尾设计", "en": "Ruffle Hemline",
+      "zh_desc": "荷叶边层次下摆，行走飘逸灵动", "en_desc": "Layered ruffle hem flows beautifully with movement"
     }
   ],
+  "target_audience": "追求甜美法式风格的18-30岁年轻女性",
+  "target_scenes": ["海边度假", "浪漫约会", "周末聚会"],
+  "target_scene_envs": [
+    "tropical beach, golden sand and turquoise ocean, bright midday sunlight, coastal vibe",
+    "romantic outdoor restaurant terrace at dusk, warm candlelight, string lights bokeh",
+    "chic rooftop social gathering, urban skyline backdrop, golden hour glow"
+  ],
+  "product_style": "甜美法式浪漫",
+  "print_design_lock": "black spaghetti dress with delicate cherry blossom floral print, cross-strap V-neckline, ruffle hemline — exact same print pattern, color and proportions must not change",
   "input_image_type": "flat_lay"
 }
 ```
 
-### 核心卖点图（key_features）自动模板选择
+### 核心卖点图（key_features）展示样式选择
 
-generate.py 根据 `garment_position` 字段**自动选择模板**，无需 Agent 干预：
+> ⚠️ **Agent 必须根据商品卖点特征智能分析并推荐，不得使用简单规则匹配。**
 
-| 商品类型 | 自动选用模板 | 视觉效果 |
-|---------|-------------|---------|
-| 服装/鞋类（`garment_position` ≠ `non-apparel`） | **放大镜特写模板** | 居中主图 + 3个圆形放大镜气泡，连细线到商品局部，展示 3 个卖点细节特写 |
-| 非服装类（`garment_position = non-apparel`） | **信息图标模板** | 左侧商品图 + 右侧 3 条图标+文字卖点 |
+**Agent 智能分析流程**：
 
-放大镜气泡内容自动取自 `selling_points[0..2].visual_keywords`（首两个关键词）。
+1. **读取商品卖点**：分析 `selling_points` 数组，判断卖点类型
+   - 材质细节类（莫代尔面料、真丝、蕾丝）→ 需要局部特写 → 推荐 **① 放大镜气泡**
+   - 功能特点类（防晒、速干、防水、保温）→ 需要图标化说明 → 推荐 **② 信息图标列表**
+   - 设计亮点类（交叉细吊带、荷叶边下摆、法式浪漫）→ 需要标注指向 → 推荐 **③ 标注线指示**
+   - 高端定位类（奢侈品质感、极简设计）→ 需要分割排版 → 推荐 **④ 分割板块**
+
+2. **给出有理有据的推荐**：
+
+> 根据分析您的商品卖点「莫代尔柔软材质、交叉细吊带设计、荷叶边下摆」，我推荐：
+>
+> **① 放大镜气泡** — 原因：您的卖点集中在材质细节（莫代尔）和设计细节（吊带、荷叶边），放大镜气泡可以清晰展示这些局部特写，让用户直观感受材质质感和设计亮点。
+
+> 请选择编号（或直接回车使用推荐），也可以选择其他样式：
+
+向用户展示所有选项：
+
+> **① 放大镜气泡** — 居中主图 + 3个圆形放大镜气泡，连细线到商品局部
+> **② 信息图标列表** — 左侧商品图 + 右侧 3 条图标+文字卖点列表
+> **③ 标注线指示** — 商品居中 + 手写风格标注线指向各部位（生活杂志风）
+> **④ 分割板块** — 上下/左右分割，每块一个卖点 + 对应商品局部特写（极简洁风）
+
+**用户确认后**：Agent 通过 `--per-type-templates key_features:N` 参数传递选择（①→默认，②→默认非服装，③→2，④→3）
+
+---
+
+> 💡 **重要**：Agent 推荐必须基于卖点分析，而非简单规则匹配。例如：
+> - 错误：`if 服装 then 推荐①`
+> - 正确：`if 卖点包含材质细节 or 设计亮点 then 推荐①，理由是...`
+
+放大镜气泡内容自动取自 `selling_points[0..2].visual_keywords`（首两个关键词，**必须为英文**，直接嵌入英文 Prompt）。
 
 ---
 
@@ -478,27 +659,47 @@ Agent 根据第二步分析结果中的 `product_type` 判断：
 
 ### 4.2 选择模特来源与展示风格
 
-> ⚠️ **Agent 必须主动向用户提出此问题，不得跳过或自行决定。**
+> ⚠️ **Agent 必须主动向用户确认模特来源，不得跳过或自行决定。**
 
-若需要模特，**一次性**向用户提问：
+若需要模特，向用户提问（**仅询问模特来源**）：
 
-> 模特展示图需要确认以下两个设置：
+> 模特展示图的**模特来源**请选择：
 >
-> **① 模特来源**
 > 1. **使用内置模特库** — 从预置的 AI 模特中选择，Agent 展示图片后确认（推荐，形象稳定一致）
 > 2. **AI 自动生成** — 由 AI 生成随机模特，生成后展示给您确认，确认后锁定用于场景图和多场景图
->
-> **② 展示风格**
-> 1. **标准商拍** — 户外/棚拍常规展示（默认，适用于大多数服装）
-> 2. **贴身合体** — 强调贴合身体效果（适用于紧身衣物、内衣、泳装、健身服等）
 
-**展示风格处理**：用户选择「贴身合体」则调用 generate.py 时加上 `--model-style bodycon`；默认选「标准商拍」无需额外参数。
+**② 模特种族偏好（根据目标市场询问）**
+
+Agent 根据目标销售平台/地区询问用户模特种族偏好：
+
+> 请问您希望使用什么种族的模特？（根据目标市场选择）
+>
+> 1. **亚洲模特** — 适合国内市场（淘宝、京东、拼多多）或东亚市场
+> 2. **欧美模特** — 适合跨境平台（Amazon、独立站）或欧美市场
+> 3. **混合种族** — 多元化展示，适合国际化定位
+
+Agent 将用户选择传递给 generate.py：在商品 JSON 中添加 `"model_ethnicity": "asian/western/mixed"` 字段。
+
+**③ 展示风格（Agent 根据商品分析 JSON 自动判断，无需询问用户）**
+
+Agent 获取商品 JSON 后，按以下规则自动选择 `--model-style`：
+
+| 判断条件（任一字段含以下关键词即触发） | 自动选择 | 参数 |
+|---|---|---|
+| `product_type` 含：内衣 / 睡衣 / 泳装 / 比基尼 / 塑形衣 / 紧身裤 / 瑜伽裤 / 健身衣 | 贴身合体 | `--model-style bodycon` |
+| `style` 含：修身 / 紧身 / 贴身 / slim / bodycon | 贴身合体 | `--model-style bodycon` |
+| `material` 含：莫代尔 / 弹力 / 氨纶 / spandex / lycra | 贴身合体 | `--model-style bodycon` |
+| 其他所有商品 | 标准商拍 | 默认，无需传参 |
+
+> 若关键词无法确定，默认「标准商拍」。自动选择后可在回复中顺带说明（如：「已根据商品类型自动选择贴身合体展示风格」），用户如不满意可随时告知调整。
 
 ### 4.3 内置模特选择（用户选择方案 1）
 
 > 🔒 **人物锁定**：选定内置模特后，`--model-image` 参数会作为参考图传入生图脚本。generate.py 会在 Prompt 中嵌入强制指令，要求生图模型严格复刻参考图中的人物外貌，**不得替换为其他人物或外国面孔。**
 
-**Agent 必须展示模特图片，禁止只用文字描述。**
+> **CLI 环境说明**：若当前运行环境（如 Claude Code CLI 或其他命令行界面）不支持内联展示图片，**禁止说"让我为您展示生成的套图"**，应直接列出图片的绝对路径。此规则适用于本技能所有需要展示图片的场景（模特选择、模特确认、生成结果汇总）。图片路径从 `generate_result.json` 或 `assets/models/{id}.png` 读取。
+
+**Agent 必须展示模特图片（图形界面）或列出图片路径（CLI 环境），禁止只用文字描述。**
 
 流程：
 
@@ -572,7 +773,7 @@ model_image_path = result["model"]["path"]  # 已是绝对路径
 ```
 
 > 这是为您生成的模特展示图：
-> [展示 {model_image_path} 图片]
+> [展示 {model_image_path} 图片]（CLI 环境：直接输出路径 `{model_image_path}`）
 >
 > 请问这个模特满意吗？
 > 1. **满意** — 保存并用于场景展示图、多场景拼图
@@ -629,49 +830,117 @@ model 生成完成 → 自动用作 lifestyle 的 --model-image → 自动用作
 
 ---
 
-## 第四步半 B：套图模板选择
+## 第四步半 B：视觉风格模板智能推荐
 
-> ⚠️ **此步骤必须在第五步生图之前完成。** 用户选择模板后，generate.py 才会用对应风格的 Prompt 模板动态组合商品参数。
+> ⚠️ **此步骤必须在第五步生图之前完成。** Agent 必须根据商品特征智能推荐模板，不得使用简单规则匹配。
 
-### 5 套视觉风格模板
+### Agent 智能分析流程
 
-向用户展示以下选项（**默认使用第 1 套**，可全局选或按图类型分别选）：
+1. **分析商品多维信息**：
+   - `product_style`：甜美法式、运动休闲、商务正装、极简主义...
+   - `target_audience`：18-30岁年轻女性、商务人士、学生...
+   - `selling_points`：材质特点、设计亮点、功能卖点...
+   - `visual_features`：主色调、图案风格、廓形特征...
 
-| 套数 | `--template-set` | 名称 | 风格描述 | 适用场景 |
-|------|------|------|---------|---------|
-| **①** | `1` | **默认商拍** | 标准电商商拍，干净明亮，重点突出商品 | 通用，各平台均适合 |
-| **②** | `2` | **生活杂志** | 自然光，有氛围感和生活质感 | 淘宝/天猫/小红书，女装/家居 |
-| **③** | `3` | **极简高冷** | 极简留白，高反差，奢侈品质感 | 独立站/Amazon，高端品牌 |
-| **④** | `4` | **活力爆款** | 高饱和度，大字冲击，活力感强 | 拼多多/抖音，年轻客群 |
-| **⑤** | `5` | **暗调质感** | 深色系，电影质感，戏剧性打光 | 男装/数码/运动/夜场 |
+2. **综合判断推荐模板**：
 
-**各套模板对 6 种图类型的效果说明：**
+| 商品特征分析 | 推荐模板 | 推荐理由 |
+|------------|---------|---------|
+| 甜美/法式/浪漫 + 女性目标人群 | ② 生活杂志 | 自然光氛围感符合浪漫风格，适合小红书等种草平台 |
+| 运动/街头/活力 + 年轻客群 | ④ 活力爆款 | 高饱和冲击力强，符合抖音/拼多多视觉风格 |
+| 商务/高端/极简 + 成熟人群 | ③ 极简高冷 | 留白奢品感传达高端定位，适合独立站/Amazon |
+| 数码/运动/夜场 + 男性为主 | ⑤ 暗调质感 | 电影感打光突显质感，符合男性审美 |
+| 无明显风格特征或新手 | ① 默认商拍 | 干净通用，各平台均适合 |
 
-| 图类型 | ① 默认商拍 | ② 生活杂志 | ③ 极简高冷 | ④ 活力爆款 | ⑤ 暗调质感 |
-|--------|-----------|-----------|-----------|-----------|-----------|
-| 核心卖点图 | 放大镜气泡/信息图标 | 商品居中+手写标注线 | 黑底白字+单色线框 | 爆炸形背景+粗体红字 | 深灰底+金色描边气泡 |
-| 卖点图 | 卧室暖光 | 咖啡馆窗前自然光 | 纯白棚拍极简 | 户外街头高饱和 | 暗调棚拍聚光灯 |
-| 材质图 | 极macro面料 | 木纹/大理石桌面铺陈 | 折叠几何极简 | 对折叠叠高饱和 | 暗色背景金边光圈 |
-| 场景展示图 | 校园/咖啡厅 | 户外公园黄金时刻 | 白色简洁室内 | 街头活力 | 城市夜景/聚光棚拍 |
-| 模特展示图 | 户外阳光走路 | 坐姿休闲咖啡厅 | 白底棚拍全身 | 街拍动态跳跃 | 暗调棚拍聚焦 |
-| 多场景拼图 | 左右分屏 | 三格日记卡片 | 上下黑白分割 | 对角爆炸分割 | 暗调三屏电影感 |
+3. **给出有理有据的推荐**：
 
-**Agent 询问话术：**
-
-> 接下来请选择整体视觉风格模板（影响所有图片的氛围和排版）：
+> 根据分析您的商品特征：
+> - 风格定位：甜美法式浪漫
+> - 目标人群：18-30岁年轻女性
+> - 主色调：柔和粉色系
+> - 平台定位：淘宝/小红书
 >
-> **① 默认商拍** — 标准电商风，干净通用（推荐新手）
-> **② 生活杂志** — 自然光氛围感，女装/家居首选
-> **③ 极简高冷** — 留白奢品感，高端品牌
-> **④ 活力爆款** — 高饱和冲击，拼多多/抖音
-> **⑤ 暗调质感** — 电影感打光，男装/数码/运动
+> 我推荐 **② 生活杂志**：
+> **理由**：自然光氛围感与甜美法式风格高度契合，黄金时刻的光效能增强浪漫氛围，非常适合小红书等种草平台的视觉调性。
+
+> 请选择编号（或直接回车使用推荐），也可以选择其他模板：
+
+### 6 套视觉风格模板参考
+
+| 套数 | 名称 | 风格描述 | 支持 |
+|------|------|---------|------|
+| **①** | 默认商拍 | 标准电商商拍，干净明亮，重点突出商品 | ✅ |
+| **②** | 生活杂志 | 自然光，有氛围感和生活质感 | ✅ |
+| **③** | 极简高冷 | 极简留白，高反差，奢侈品质感 | ✅ |
+| **④** | 活力爆款 | 高饱和度，大字冲击，活力感强 | ✅ |
+| **⑤** | 暗调质感 | 深色系，电影质感，戏剧性打光 | ✅ |
+| **⑥** | 非对称布局 | 左侧大图（60%）+ 右侧细节图（40%），突出主次层次 | ✅ 2026.04 新增 |
+
+**各套模板对不同图类型的效果**（供用户参考）：
+
+| 图类型 | ① 默认商拍 | ② 生活杂志 | ③ 极简高冷 | ④ 活力爆款 | ⑤ 暗调质感 | ⑥ 非对称布局 |
+|--------|-----------|-----------|-----------|-----------|-----------|-------------|
+| 核心卖点图 | 放大镜气泡/信息图标 | 商品居中+手写标注线 | 黑底白字+单色线框 | 爆炸形背景+粗体红字 | 深灰底+金色描边气泡 | 左侧气泡+右侧说明 |
+| 卖点图 | 卧室暖光 | 咖啡馆窗前自然光 | 纯白棚拍极简 | 户外街头高饱和 | 暗调棚拍聚光灯 | 左侧大场景+右侧细节 |
+| 材质图 | 极macro面料 | 木纹/大理石桌面铺陈 | 折叠几何极简 | 对折叠叠高饱和 | 暗色背景金边光圈 | 左侧面料+右侧纹理 |
+| 场景展示图 | 校园/咖啡厅 | 户外公园黄金时刻 | 白色简洁室内 | 街头活力 | 城市夜景/聚光棚拍 | 左侧主景+右侧环境 |
+| 模特展示图 | 户外阳光走路 | 坐姿休闲咖啡厅 | 白底棚拍全身 | 街拍动态跳跃 | 暗调棚拍聚焦 | 左侧全身+侧面特写 |
+| 多场景拼图 | 左右分屏 | 三格日记卡片 | 上下黑白分割 | 对角爆炸分割 | 暗调三屏电影感 | 左侧大图+右侧小图对比 |
+| 三角度拼图 | 等宽三列展示 | 日记卡片风格 | 黑白高对比 | 高饱和三列 | 电影感三屏 | 非对称英雄主图 |
+
+**用户确认后**：Agent 通过 `--template-set N` 参数传递选择
+
+---
+
+### 非对称布局模板（⑥）专项询问
+
+> ⚠️ **Agent 必须在用户确认全局模板后，主动询问是否使用非对称布局。** 非对称布局（模板⑥）采用"左侧大图（60%）+ 右侧细节图（40%）"的构图，特别适合需要突出主次关系的图类型。
+
+**Agent 操作流程：**
+
+1. **智能推荐适合的图类型**：根据商品特征分析，推荐适合使用非对称布局的图类型
+
+| 图类型 | 非对称布局效果 | 适合商品特征 |
+|--------|---------------|-------------|
+| 核心卖点图 | 左侧气泡+右侧说明文字 | 卖点较多、需要图文结合的商品 |
+| 卖点图 | 左侧大场景+右侧细节特写 | 有明确设计细节、需要突出局部卖点 |
+| 材质图 | 左侧面料+右侧纹理特写 | 材质质感重要、需要放大展示的商品 |
+| 场景展示图 | 左侧主景+右侧环境氛围 | 场景氛围强、需要环境烘托的商品 |
+| 模特展示图 | 左侧全身+侧面特写 | 服装/鞋类、需要多角度展示的商品 |
+| 多场景拼图 | 左侧大图+右侧小图对比 | 有多场景对比需求的商品 |
+
+2. **给出个性化推荐**：
+
+> 根据分析您的商品特征，非对称布局（模板⑥）特别适合以下图类型：
 >
-> 直接输入编号即可。如需对某几种图单独指定不同模板，请告知（如"材质图用③，其余用①"）。
+> • **[推荐图类型1]** — 原因：[具体分析]
+> • **[推荐图类型2]** — 原因：[具体分析]
+>
+> 非对称布局采用"左侧大图+右侧细节"的构图，能更好地突出商品的主次层次。
+>
+> **请选择您希望使用非对称布局的图类型（可多选）：**
+>
+> A. 核心卖点图 — 左侧气泡+右侧说明文字
+> B. 卖点图 — 左侧大场景+右侧细节特写
+> C. 材质图 — 左侧面料+右侧纹理特写
+> D. 场景展示图 — 左侧主景+右侧环境氛围
+> E. 模特展示图 — 左侧全身+侧面特写
+> F. 多场景拼图 — 左侧大图+右侧小图对比
+> G. 无需使用非对称布局
+>
+> **请输入字母（可多选，如 ABDF 或 G）：**
 
-**记录选择，传入参数：**
+3. **用户选择后**：Agent 使用 `--per-type-templates` 参数传递选择
 
-- 全局统一：`--template-set N`
-- 按类型分开：`--per-type-templates key_features:2,material:3,selling_pt:4`（其余用全局）
+示例：
+- 用户选择 A、D、F → `--per-type-templates key_features:6,lifestyle:6,multi_scene:6`
+- 用户选择 G → 不添加额外参数
+
+**高级用法**：用户还可对其他图类型指定不同模板（如"材质图用③，其余用②"），Agent 使用 `--per-type-templates key_features:2,material:3` 参数传递。
+
+---
+
+> 💡 **重要**：Agent 推荐必须基于商品特征的多维分析，而非简单 `if 甜美 then ②`。推荐理由要具体说明分析过程。
 
 ---
 
@@ -686,21 +955,120 @@ model 生成完成 → 自动用作 lifestyle 的 --model-image → 自动用作
 
 > 检测到以下图像生成供应商可用：
 >
-> | 编号 | 供应商 | 默认模型 | 国内直连 |
-> |------|--------|---------|---------|
-> | 1 | 阿里云通义 | `wan2.7-image-pro` | ✅ |
-> | 2 | 字节跳动豆包 | `doubao-seedream-5-0-260128` | ✅ |
-> | 3 | OpenAI | `dall-e-3` | 需代理 |
-> | 4 | Google Gemini | `gemini-3.1-flash-image-preview` | 需代理 |
-> | 5 | Stability AI | `core` | 需代理 |
+> | 编号 | 供应商 | 默认模型 | 参考图 | 国内直连 |
+> |------|--------|---------|-------|---------|
+> | 1 | 阿里云通义 | `wan2.7-image-pro` | ✅ | ✅ |
+> | 2 | 字节跳动豆包 | `doubao-seedream-4-5-251128` | ✅ | ✅ |
+> | 3 | Google Gemini | `gemini-3.1-flash-image-preview` | ✅ | 需代理 |
+> | 4 | OpenAI | `dall-e-3` | ⚠️ 仅 GPT Image | 需代理 |
+> | 5 | Stability AI | `core` | ❌ | 需代理 |
 >
 > _(仅展示已配置 API Key 的供应商)_
 >
+> **参考图说明**：提供商品参考图后，生成的图片会保持商品外观（图案、材质、轮廓）。推荐优先选择标注 ✅ 的供应商。
+>
 > 请选择使用哪个供应商？（如需使用非默认模型，也可一并告知）
+
+**OpenAI 特殊说明**：默认 `dall-e-3` **不支持参考图**，会根据描述重新生成商品外观。如需保留原图外观，需使用 GPT Image 模型（如 `gpt-image-1.5`），可通过环境变量 `OPENAI_MODEL` 或参数 `--model` 指定。
 
 **若用户未明确指定**，优先推荐国内直连供应商（通义 > 豆包），并告知用户。
 
-### 5.1 生成模式选择
+### 5.1 语言选择
+
+> ⚠️ **Agent 必须在选择供应商后立即确认目标语言，不得跳过。**
+
+向用户提问：
+
+> 您的目标销售平台是？
+>
+> **① 国内平台**（淘宝、京东、拼多多、抖音等）→ 使用**中文简体**
+> **② 国际平台**（Amazon、独立站、Shopee 等）→ 使用**English**
+>
+> 选择后将影响所有生成图片的文字内容（卖点标签、场景文字等）。
+
+**记录语言选择**：
+- 国内平台 → `lang = "zh"`，传递 `--lang zh`
+- 国际平台 → `lang = "en"`，传递 `--lang en`
+
+> ⚠️ **Gemini/OpenAI 特别注意**：选择国内平台时，Agent 必须在调用 generate.py 前确保商品 JSON 中的 `zh_desc`/`en_desc` 和 `visual_keywords` 字段正确填充，并在 prompt 中明确约束"中文简体"。
+
+---
+
+### 5.2 场景智能推荐与确认
+
+> ⚠️ **Agent 必须根据商品具体特征动态生成场景推荐，禁止使用固定模板列表。**
+
+**Agent 智能分析流程**：
+
+1. **深度读取商品信息**：分析以下字段，提取商品特征
+   - `product_name`：黑色碎花交叉细吊带荷叶边连衣裙
+   - `product_style`：甜美法式浪漫
+   - `target_audience`：18-30岁年轻女性
+   - `selling_points`：莫代尔柔软材质、交叉细吊带、荷叶边下摆、碎花印花
+   - `visual_features.main_color`：黑色/深色系
+   - `visual_features.pattern`：碎花印花
+
+2. **基于特征动态生成场景**（而非套用固定列表）：
+
+| 商品特征提取 | 动态生成场景示例 | 推荐理由 |
+|------------|----------------|---------|
+| **碎花印花** + 甜美风格 | 春日野餐、花园下午茶、公园花海 | 碎花与自然环境相得益彰 |
+| **交叉细吊带 + 荷叶边** + 年轻女性 | 音乐节、户外咖啡、校园漫步 | 法式设计适合休闲社交场景 |
+| **莫代尔柔软材质** + 浪漫定位 | 蜜月旅行、海滩度假、日落散步 | 柔软材质适合浪漫氛围场景 |
+| **黑色/深色系** + 甜美风格 | 夜市约会、酒吧小聚、晚餐约会 | 深色适合晚间社交场景 |
+
+3. **给出个性化推荐**（禁止套用模板）：
+
+> 根据分析您的商品「黑色碎花交叉细吊带荷叶边连衣裙」：
+> - **印花特征**：碎花图案 → 适合户外自然场景（野餐、花园、公园）
+> - **设计特征**：交叉细吊带 + 荷叶边 → 法式浪漫风格 → 适合休闲社交（咖啡、下午茶）
+> - **材质特征**：莫代尔柔软 → 适合浪漫氛围（度假、约会）
+> - **目标人群**：18-30岁年轻女性 → 适合活力场景（音乐节、校园、夜市）
+>
+> 我为您生成以下个性化场景推荐：
+>
+> | 编号 | 场景 | 推荐理由 |
+> |------|------|---------|
+> | ① | 春日野餐 | 碎花印花与草地环境天然搭配，展现甜美户外氛围 |
+> | ② | 花园下午茶 | 法式浪漫风格，碎花与花园场景相得益彰 |
+> | ③ | 夜市约会 | 黑色深色系适合晚间场景，吊带设计展现约会魅力 |
+> | ④ | 音乐节活力 | 年轻目标人群，法式设计适合户外活力场景 |
+>
+> 请选择编号（可多选，如 1 2 3 4），或输入自定义场景名称。
+
+4. **用户确认后生成英文环境描述**：
+
+Agent 将用户选择的中文场景转换为详细的英文环境描述：
+
+```json
+{
+  "target_scenes": ["春日野餐", "花园下午茶", "夜市约会", "音乐节活力"],
+  "target_scene_envs": [
+    "spring picnic on green grass lawn, wildflowers scattered, dappled sunlight through trees, fresh outdoor atmosphere",
+    "garden afternoon tea, blooming flowers, vintage table setting, warm natural light, romantic French style",
+    "night market dating, string lights and lanterns, vibrant evening atmosphere, social dining scene",
+    "music festival energy, young crowd, outdoor stage, dynamic lighting, lively concert atmosphere"
+  ]
+}
+```
+
+> 💡 **重要**：场景推荐必须基于商品具体特征（印花、设计、材质、颜色）**动态生成**，禁止使用固定模板列表（如"海边度假、浪漫约会、咖啡厅休闲"）。每件商品的特征不同，推荐场景应该不同。
+
+**Agent 场景生成思考过程**（内部思考，不向用户展示）：
+
+```
+1. 读取商品信息：product_name=黑色碎花连衣裙, pattern=碎花, style=甜美法式
+2. 提取特征关键词：碎花→户外自然；法式→休闲社交；黑色→晚间场景
+3. 组合特征生成场景：
+   - 碎花 + 户外 → 春日野餐、花园下午茶
+   - 法式 + 社交 → 咖啡厅、音乐节
+   - 黑色 + 晚间 → 夜市约会、酒吧小聚
+4. 筛选最合适的 3-5 个场景，给出推荐理由
+```
+
+---
+
+### 5.3 生成模式选择
 
 > ⚠️ **Agent 必须在执行生图前选择模式，不得跳过。**
 
@@ -709,9 +1077,9 @@ model 生成完成 → 自动用作 lifestyle 的 --model-image → 自动用作
 > 1. **一次性批量生成** — 自动依次生成所有套图（推荐，省时）
 > 2. **逐张确认** — 每张图生成后暂停，查看效果后再继续
 
-**一次性模式**：直接调用 generate.py 传入全部 `--types`，生成完后一并展示结果。
+**一次性模式**：直接调用 generate.py 传入全部 `--types`，生成完后读取 `generate_result.json`，列出所有图片的绝对路径（CLI 环境）或逐一展示图片（图形界面环境）。
 
-**逐张模式**：每次只传入一个 `--types`，生成后向用户展示该图路径，获得确认后再生成下一张。若用户对某张不满意，可修改 Prompt 后重新生成该张。
+**逐张模式**：每次只传入一个 `--types`，生成后向用户列出该图的绝对路径（CLI 环境）或展示图片（图形界面环境），获得确认后再生成下一张。若用户对某张不满意，可修改 Prompt 后重新生成该张。
 
 ### 执行生图脚本
 
@@ -734,10 +1102,10 @@ python3 scripts/generate.py \
 | `--api-key` | API Key，也可通过环境变量传入 | 环境变量 |
 | `--base-url` | 自定义代理地址，也可通过 `*_BASE_URL` 环境变量传入 | 官方地址 |
 | `--model` | 模型名称，也可通过 `*_MODEL` 环境变量传入 | 见供应商表 |
-| `--types` | 逗号分隔的套图类型 | 全部 7 种 |
-| `--lang` | 图片内嵌文案语言：`zh`（中文）/ `en`（英文，国际平台） | `zh` |
+| `--types` | 逗号分隔的套图类型；当仅提供一张商品图时自动添加 `three_angle_view` | 全部 8 种：white_bg、key_features、selling_pt、material、lifestyle、model、multi_scene、ecommerce_detail |
+| `--lang` | **重要**：图片内嵌文案语言。国内平台→`zh`（中文简体），国际平台→`en`（English）。Gemini/OpenAI 需根据此值在 prompt 中明确约束语言 | `zh` |
 | `--model-style` | 模特展示风格：`standard`（标准商拍）/ `bodycon`（贴身合体，适用于紧身衣物） | `standard` |
-| `--template-set` | 全局视觉风格模板：`1`=默认商拍 `2`=生活杂志 `3`=极简高冷 `4`=活力爆款 `5`=暗调质感 | `1` |
+| `--template-set` | 全局视觉风格模板：`1`=默认商拍 `2`=生活杂志 `3`=极简高冷 `4`=活力爆款 `5`=暗调质感 `6`=非对称布局（2026.04新增） | `1` |
 | `--per-type-templates` | 按图类型单独指定模板（覆盖 `--template-set`），格式：`key_features:2,material:3` | 无 |
 | `--product-images` | **推荐**，逗号分隔的商品参考图列表（按顺序：正面图,背面图,...）；白底/卖点图用正面，材质图自动用背面 | 无 |
 | `--product-image` | 单张商品参考图（向后兼容，等价于 `--product-images` 只传一张） | 无 |
@@ -973,7 +1341,7 @@ python3 scripts/generate_video.py \
 | `--audio` | 是否生成有声视频（加此 flag 为有声） | 无声 |
 | `--ratio` | 视频比例：`16:9` / `9:16` / `1:1` / `4:3` / `3:4` / `21:9` | `16:9` |
 | `--duration` | 视频时长（秒）：`4`/`5`/`6`/`8`/`10`/`12`/`15`（Seedance 2.0 支持 4-15s） | `6` |
-| `--model` | 模型名称 | `doubao-seedance-2-0-260128` |
+| `--model` | 模型名称（视频生成） | `doubao-seedance-2-0-260128` |
 | `--api-key` | ARK API Key（也可通过 `ARK_API_KEY` 环境变量传入） | 环境变量 |
 | `--max-wait` | 最大等待时间（秒） | `600` |
 | `--output-dir` | 输出目录 | `./output/video/` |
@@ -1006,13 +1374,13 @@ python3 scripts/generate_video.py \
 | `references/providers.md` | 供应商 API 接入详情 |
 | `scripts/check_providers.py` | 检测已配置的**图像生成**供应商（读取环境变量） |
 | `scripts/analyze.py` | **商品图视觉分析**（Qwen VL → 豆包视觉 → GPT-4o 自动降级，输出卖点 JSON） |
-| `scripts/generate.py` | 调用图像生成 API（5个供应商，文案由模型直接渲染，支持 `--lang` / `--model` / `--base-url` / `--api-key`） |
+| `scripts/generate.py` | 调用图像生成 API（5个供应商，文案由模型直接渲染，支持 `--lang` / `--model` / `--base-url` / `--api-key`；支持 8 种图类型+自动补充） |
 | `references/copy-prompts.md` | 6平台文案 Prompt + 6平台详情页 HTML Prompt（Agent 直接使用，无需脚本） |
 | `references/model-prompts.md` | 模特图 Prompt 模板（4种风格 + 品类自动映射） |
 | `assets/models.json` | 内置 AI 模特库（45 个模特，含风格/性别/体型信息） |
 | `assets/models/*.png` | 内置模特参考图（与 models.json 中 id 对应） |
 
-| `scripts/generate_video.py` | 调用豆包 Seedance 生成产品展示视频（需 `ARK_API_KEY`） |
+| `scripts/generate_video.py` | 调用豆包 Seedance 生成产品展示视频（需 `ARK_API_KEY`）；支持 16:9、9:16、1:1 多种比例 |
 
 ---
 
